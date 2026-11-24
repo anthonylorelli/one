@@ -547,7 +547,10 @@ fn convert_rich_text_block(rt: &RichText) -> Option<Block> {
 
     // If the entire paragraph is styled with a monospace font and contains multiple lines,
     // emit a fenced code block.
-    if is_monospace_style(rt.paragraph_style()) && rt.text().contains('\n') && tags.is_empty() {
+    if is_monospace_style(rt.paragraph_style())
+        && rt.text().contains(['\n', '\r'])
+        && tags.is_empty()
+    {
         let code = visible_plain_text(rt);
         if !code.trim().is_empty() {
             return Some(Block::CodeBlock {
@@ -762,7 +765,7 @@ fn visible_plain_text(rt: &RichText) -> String {
     let utf16: Vec<u16> = rt.text().encode_utf16().collect();
     let formatting = rt.text_run_formatting();
     if formatting.is_empty() {
-        return strip_onenote_control_chars(rt.text());
+        return normalize_newlines(&strip_onenote_control_chars(rt.text()));
     }
     let mut bounds: Vec<usize> = std::iter::once(0)
         .chain(rt.text_run_indices().iter().map(|&i| (i as usize).min(utf16.len())))
@@ -781,7 +784,11 @@ fn visible_plain_text(rt: &RichText) -> String {
             out.extend_from_slice(&utf16[start..end]);
         }
     }
-    strip_onenote_control_chars(&String::from_utf16_lossy(&out))
+    normalize_newlines(&strip_onenote_control_chars(&String::from_utf16_lossy(&out)))
+}
+
+fn normalize_newlines(s: &str) -> String {
+    s.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 fn strip_onenote_control_chars(s: &str) -> String {

@@ -257,6 +257,8 @@ fn plan_pages_nested<'a>(
     }
 
     let mut root_used = HashSet::new();
+    // Reserve `_assets` so a parent page titled `_assets` cannot collide with `<section>/_assets/`.
+    root_used.insert("_assets".to_string());
     let mut stack: Vec<StackFrame> = Vec::new();
 
     for (idx, page) in section.pages.iter().enumerate() {
@@ -484,6 +486,35 @@ mod tests {
         assert_eq!(
             plan.registry.resolve(&by_title, "Design"),
             Some(Path::new("Work/Design/Standalone.md"))
+        );
+    }
+
+    #[test]
+    fn avoids_assets_dir_collision_for_nested_parent_page() {
+        let bundle = SourceBundle {
+            notebooks: vec![Notebook {
+                id: None,
+                name: "Work".into(),
+                entries: vec![SectionEntry::Section(Section {
+                    id: None,
+                    name: "Design".into(),
+                    pages: vec![
+                        page("11111111-1111-1111-1111-111111111111", "_assets", 0),
+                        page("22222222-2222-2222-2222-222222222222", "Child", 1),
+                    ],
+                })],
+            }],
+            warnings: vec![],
+        };
+
+        let plan = build_plan(&bundle, &ExportOptions::default());
+        assert_eq!(
+            plan.pages[0].relative_md_path,
+            Path::new("Work/Design/_assets (2)/_assets (2).md")
+        );
+        assert_eq!(
+            plan.pages[1].relative_md_path,
+            Path::new("Work/Design/_assets (2)/Child.md")
         );
     }
 }

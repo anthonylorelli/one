@@ -45,8 +45,9 @@ pub fn render_page(
             if plain_text_inlines(inlines).trim().eq_ignore_ascii_case(planned.page.title.trim())
     );
     if !first_is_same_h1 && !planned.page.title.trim().is_empty() {
+        let single_line_title = planned.page.title.trim().replace(['\r', '\n'], " ");
         out.push_str("# ");
-        out.push_str(planned.page.title.trim());
+        out.push_str(&single_line_title);
         out.push_str("\n\n");
     }
 
@@ -109,9 +110,12 @@ impl<'a> RenderCtx<'a> {
 
                 if let Some(done) = checkbox {
                     let box_str = if done { "[x]" } else { "[ ]" };
-                    format!("{pad}- {box_str} {prefix}{trimmed}{suffix}")
+                    let cont_pad = format!("{pad}  ");
+                    let body = indent_continuation_lines(trimmed, &cont_pad);
+                    format!("{pad}- {box_str} {prefix}{body}{suffix}")
                 } else {
-                    format!("{pad}{prefix}{trimmed}{suffix}")
+                    let body = indent_continuation_lines(trimmed, &pad);
+                    format!("{pad}{prefix}{body}{suffix}")
                 }
             }
             Block::List {
@@ -224,6 +228,12 @@ impl<'a> RenderCtx<'a> {
                         let combined = format!("{p}{}{s}", text.trim());
                         if !combined.trim().is_empty() {
                             first_line_text = Some(indent_continuation_lines(&combined, &cont_pad));
+                        }
+                    }
+                    Block::Image { .. } | Block::Attachment { .. } if first_line_text.is_none() => {
+                        let rendered = self.render_block(block, 0);
+                        if !rendered.trim().is_empty() {
+                            first_line_text = Some(rendered);
                         }
                     }
                     other => {
@@ -934,5 +944,71 @@ mod tests {
     #[test]
     fn yaml_quote_escapes_tabs_and_control_chars() {
         assert_eq!(yaml_quote("a\tb\nc\x07d"), "\"a\\tb\\nc d\"");
+    }
+
+    #[test]
+    fn renders_image_only_list_item_inline_and_indents_child_paragraph_breaks() {
+        let bundle = SourceBundle {
+            notebooks: vec![Notebook {
+                id: None,
+                name: "Nb".into(),
+                entries: vec![SectionEntry::Section(Section {
+                    id: None,
+                    name: "Sec".into(),
+                    pages: vec![Page {
+                        id: None,
+                        title: "Line1\nLine2".into(),
+                        level: 0,
+                        created_at: None,
+                        updated_at: None,
+                        author: None,
+                        web_url: None,
+                        client_url: None,
+                        blocks: vec![Block::List {
+                            ordered: false,
+                            start: 1,
+                            items: vec![ListItem {
+                                checkbox: None,
+                                tags: vec![],
+                                content: vec![Block::Image {
+                                    asset_id: "img-1".into(),
+                                    alt: "Logo".into(),
+                                    hyperlink: None,
+                                    tags: vec![],
+                                }],
+                                children: vec![Block::Paragraph {
+                                    inlines: vec![
+                                        Inline::Text("Child line 1".into()),
+                                        Inline::LineBreak,
+                                        Inline::Text("Child line 2".into()),
+                                    ],
+                                    tags: vec![],
+                                }],
+                            }],
+                        }],
+                        assets: vec![],
+                    }],
+                })],
+            }],
+            warnings: vec![],
+        };
+
+        let opts = ExportOptions {
+            include_frontmatter: false,
+            ..Default::default()
+        };
+        let plan = build_plan(&bundle, &opts);
+        let mut assets = HashMap::new();
+        assets.insert("img-1".into(), PathBuf::from("Nb/Sec/_assets/logo.png"));
+        let rendered = render_page(&plan.pages[0], &assets, &plan.registry, &opts);
+
+        assert!(rendered.markdown.starts_with("# Line1 Line2\n\n"));
+        assert!(
+            rendered
+                .markdown
+                .contains("- ![Logo](_assets/logo.png)\n  Child line 1  \n  Child line 2"),
+            "Unexpected markdown:\n{}",
+            rendered.markdown
+        );
     }
 }

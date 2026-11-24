@@ -111,6 +111,12 @@ impl OneNoteSource for LocalFileSource {
     }
 }
 
+struct DirectoryScan {
+    id: Option<String>,
+    entries: Vec<SectionEntry>,
+    found_any_files: bool,
+}
+
 fn load_directory(
     parser: &Parser,
     dir: &Path,
@@ -127,8 +133,8 @@ fn load_directory(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "Notebook".to_string());
 
-    let (id, entries) = load_directory_entries(parser, dir, warnings)?;
-    if entries.is_empty() {
+    let scan = load_directory_entries(parser, dir, warnings)?;
+    if !scan.found_any_files {
         bail!(
             "No .onetoc2 or .one files found in directory: {}",
             dir.display()
@@ -136,9 +142,9 @@ fn load_directory(
     }
 
     Ok(Notebook {
-        id,
+        id: scan.id,
         name: nb_name,
-        entries,
+        entries: scan.entries,
     })
 }
 
@@ -146,7 +152,7 @@ fn load_directory_entries(
     parser: &Parser,
     dir: &Path,
     warnings: &mut Vec<ExportWarning>,
-) -> Result<(Option<String>, Vec<SectionEntry>)> {
+) -> Result<DirectoryScan> {
     let mut toc_files: Vec<PathBuf> = Vec::new();
     let mut one_files: Vec<PathBuf> = Vec::new();
     let mut subdirs: Vec<PathBuf> = Vec::new();
@@ -155,8 +161,10 @@ fn load_directory_entries(
         .with_context(|| format!("Failed to read directory: {}", dir.display()))?
     {
         let entry = entry?;
+        let file_type = entry.file_type()?;
         let entry_path = entry.path();
-        if entry_path.is_dir() {
+        // Use `DirEntry::file_type` (lstat) so symlinks are not followed recursively.
+        if file_type.is_dir() {
             let name = entry_path
                 .file_name()
                 .map(|n| n.to_string_lossy())
@@ -166,7 +174,7 @@ fn load_directory_entries(
             }
             continue;
         }
-        if !entry_path.is_file() {
+        if !file_type.is_file() {
             continue;
         }
         let ext = entry_path
@@ -194,9 +202,14 @@ fn load_directory_entries(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Notebook".to_string());
         let nb = convert::convert_notebook(&parsed, group_name, warnings);
-        return Ok((nb.id, nb.entries));
+        return Ok(DirectoryScan {
+            id: nb.id,
+            entries: nb.entries,
+            found_any_files: true,
+        });
     }
 
+    let mut found_any_files = !one_files.is_empty();
     let mut entries = Vec::new();
     for one_path in one_files {
         let typed = to_typed_path(&one_path)?;
@@ -217,19 +230,21 @@ fn load_directory_entries(
 
     for subdir in subdirs {
         match load_directory_entries(parser, &subdir, warnings) {
-            Ok((group_id, sub_entries)) if !sub_entries.is_empty() => {
-                let group_name = subdir
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| "Section Group".to_string());
-                entries.push(SectionEntry::SectionGroup(crate::ir::SectionGroup {
-                    id: group_id,
-                    name: group_name,
-                    entries: sub_entries,
-                }));
+            Ok(sub_scan) => {
+                found_any_files |= sub_scan.found_any_files;
+                if !sub_scan.entries.is_empty() {
+                    let group_name = subdir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "Section Group".to_string());
+                    entries.push(SectionEntry::SectionGroup(crate::ir::SectionGroup {
+                        id: sub_scan.id,
+                        name: group_name,
+                        entries: sub_scan.entries,
+                    }));
+                }
             }
-            Ok(_) => {}
             Err(err) => {
                 warnings.push(ExportWarning::new(
                     subdir.display().to_string(),
@@ -239,7 +254,11 @@ fn load_directory_entries(
         }
     }
 
-    Ok((None, entries))
+    Ok(DirectoryScan {
+        id: None,
+        entries,
+        found_any_files,
+    })
 }
 
 fn to_typed_path(path: &Path) -> Result<TypedPathBuf> {
@@ -286,7 +305,8 @@ mod tests {
 
         let parser = Parser::new();
         let mut warnings = Vec::new();
-        let _ = load_directory_entries(&parser, tmp.path(), &mut warnings).unwrap();
+        let nb = load_directory(&parser, tmp.path(), &mut warnings).unwrap();
+        assert!(nb.entries.is_empty());
 
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].scope.contains("Group A"));
