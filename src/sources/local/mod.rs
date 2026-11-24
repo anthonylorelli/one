@@ -116,14 +116,56 @@ fn load_directory(
     dir: &Path,
     warnings: &mut Vec<ExportWarning>,
 ) -> Result<Notebook> {
+    let nb_name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .or_else(|| {
+            fs::canonicalize(dir)
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Notebook".to_string());
+
+    let (id, entries) = load_directory_entries(parser, dir, warnings)?;
+    if entries.is_empty() {
+        bail!(
+            "No .onetoc2 or .one files found in directory: {}",
+            dir.display()
+        );
+    }
+
+    Ok(Notebook {
+        id,
+        name: nb_name,
+        entries,
+    })
+}
+
+fn load_directory_entries(
+    parser: &Parser,
+    dir: &Path,
+    warnings: &mut Vec<ExportWarning>,
+) -> Result<(Option<String>, Vec<SectionEntry>)> {
     let mut toc_files: Vec<PathBuf> = Vec::new();
     let mut one_files: Vec<PathBuf> = Vec::new();
+    let mut subdirs: Vec<PathBuf> = Vec::new();
 
     for entry in fs::read_dir(dir)
         .with_context(|| format!("Failed to read directory: {}", dir.display()))?
     {
         let entry = entry?;
         let entry_path = entry.path();
+        if entry_path.is_dir() {
+            let name = entry_path
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            if !name.starts_with('.') && name != "OneNote_RecycleBin" {
+                subdirs.push(entry_path);
+            }
+            continue;
+        }
         if !entry_path.is_file() {
             continue;
         }
@@ -140,26 +182,19 @@ fn load_directory(
 
     toc_files.sort();
     one_files.sort();
-
-    let nb_name = dir
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "Notebook".to_string());
+    subdirs.sort();
 
     if let Some(toc_path) = toc_files.first() {
         let typed = to_typed_path(toc_path)?;
         let parsed = parser
             .parse_notebook(typed.to_path())
             .with_context(|| format!("Failed to parse notebook TOC: {}", toc_path.display()))?;
-        return Ok(convert::convert_notebook(&parsed, nb_name, warnings));
-    }
-
-    if one_files.is_empty() {
-        bail!(
-            "No .onetoc2 or .one files found in directory: {}",
-            dir.display()
-        );
+        let group_name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Notebook".to_string());
+        let nb = convert::convert_notebook(&parsed, group_name, warnings);
+        return Ok((nb.id, nb.entries));
     }
 
     let mut entries = Vec::new();
@@ -180,11 +215,31 @@ fn load_directory(
         }
     }
 
-    Ok(Notebook {
-        id: None,
-        name: nb_name,
-        entries,
-    })
+    for subdir in subdirs {
+        match load_directory_entries(parser, &subdir, warnings) {
+            Ok((group_id, sub_entries)) if !sub_entries.is_empty() => {
+                let group_name = subdir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "Section Group".to_string());
+                entries.push(SectionEntry::SectionGroup(crate::ir::SectionGroup {
+                    id: group_id,
+                    name: group_name,
+                    entries: sub_entries,
+                }));
+            }
+            Ok(_) => {}
+            Err(err) => {
+                warnings.push(ExportWarning::new(
+                    subdir.display().to_string(),
+                    format!("Failed to scan subdirectory: {err}"),
+                ));
+            }
+        }
+    }
+
+    Ok((None, entries))
 }
 
 fn to_typed_path(path: &Path) -> Result<TypedPathBuf> {
@@ -207,4 +262,35 @@ fn file_stem_or(path: &Path, fallback: &str) -> String {
         .map(|s| s.to_string_lossy().into_owned())
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| fallback.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn scans_subdirectories_and_skips_recycle_bin_and_hidden_dirs() {
+        let tmp = tempdir().unwrap();
+        let nested = tmp.path().join("Group A");
+        let recycle = tmp.path().join("OneNote_RecycleBin");
+        let hidden = tmp.path().join(".hidden");
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir_all(&recycle).unwrap();
+        fs::create_dir_all(&hidden).unwrap();
+
+        // Invalid .one bytes trigger a scoped parse warning iff the directory was scanned
+        fs::write(nested.join("Notes.one"), b"not-a-valid-one-file").unwrap();
+        fs::write(recycle.join("Deleted.one"), b"not-a-valid-one-file").unwrap();
+        fs::write(hidden.join("Secret.one"), b"not-a-valid-one-file").unwrap();
+
+        let parser = Parser::new();
+        let mut warnings = Vec::new();
+        let _ = load_directory_entries(&parser, tmp.path(), &mut warnings).unwrap();
+
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].scope.contains("Group A"));
+        assert!(!warnings[0].scope.contains("OneNote_RecycleBin"));
+        assert!(!warnings[0].scope.contains(".hidden"));
+    }
 }

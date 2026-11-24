@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -53,8 +53,8 @@ pub fn export_bundle(
 
     // Content-hash dedup per section asset directory: (section_dir, sha256) -> relative asset path
     let mut deduped_assets: HashMap<(PathBuf, [u8; 32]), PathBuf> = HashMap::new();
-    // Filename collision tracker per section asset directory: (section_dir, lower_filename) -> count
-    let mut used_asset_names: HashMap<PathBuf, HashMap<String, usize>> = HashMap::new();
+    // Tracks every actually allocated lowercase filename per asset directory
+    let mut used_asset_names: HashMap<PathBuf, HashSet<String>> = HashMap::new();
 
     for planned in &plan.pages {
         let mut page_asset_paths: HashMap<String, PathBuf> = HashMap::new();
@@ -182,26 +182,65 @@ fn allocate_asset_filename(
     assets_dir: &Path,
     clean_name: &str,
     hash: &[u8; 32],
-    used: &mut HashMap<PathBuf, HashMap<String, usize>>,
+    used: &mut HashMap<PathBuf, HashSet<String>>,
 ) -> String {
-    let dir_map = used.entry(assets_dir.to_path_buf()).or_default();
-    let key = clean_name.to_ascii_lowercase();
-    let entry = dir_map.entry(key).or_insert(0);
-    *entry += 1;
-
-    if *entry == 1 {
+    let dir_set = used.entry(assets_dir.to_path_buf()).or_default();
+    if dir_set.insert(clean_name.to_ascii_lowercase()) {
         return clean_name.to_string();
     }
 
-    // Disambiguate colliding filenames with an 8-hex-char content hash suffix
+    // Disambiguate colliding filenames with an 8-hex-char content hash suffix, falling back
+    // to a numeric counter if the disambiguated name itself is already allocated.
     let short_hash: String = hash[..4].iter().map(|b| format!("{b:02x}")).collect();
+    let candidate = append_suffix(clean_name, &short_hash);
+    if dir_set.insert(candidate.to_ascii_lowercase()) {
+        return candidate;
+    }
+
+    let mut counter = 2usize;
+    loop {
+        let fallback = append_suffix(clean_name, &format!("{short_hash}-{counter}"));
+        if dir_set.insert(fallback.to_ascii_lowercase()) {
+            return fallback;
+        }
+        counter += 1;
+    }
+}
+
+fn append_suffix(clean_name: &str, suffix: &str) -> String {
     match clean_name.rsplit_once('.') {
-        Some((stem, ext)) => format!("{stem}-{short_hash}.{ext}"),
-        None => format!("{clean_name}-{short_hash}"),
+        Some((stem, ext)) => format!("{stem}-{suffix}.{ext}"),
+        None => format!("{clean_name}-{suffix}"),
     }
 }
 
 fn datetime_to_system_time(ts: chrono::DateTime<chrono::Utc>) -> Option<SystemTime> {
     let secs = u64::try_from(ts.timestamp()).ok()?;
     UNIX_EPOCH.checked_add(Duration::new(secs, ts.timestamp_subsec_nanos()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocate_asset_filename_never_collides_with_disambiguated_names() {
+        let dir = Path::new("Section/_assets");
+        let mut used = HashMap::new();
+
+        let hash_a = [0x11u8; 32];
+        let mut hash_b = [0x22u8; 32];
+        hash_b[0..4].copy_from_slice(&[0xab, 0xcd, 0x12, 0x34]);
+
+        // Pre-allocate literal name matching hash_b's disambiguated form
+        let first = allocate_asset_filename(dir, "diagram-abcd1234.png", &hash_a, &mut used);
+        assert_eq!(first, "diagram-abcd1234.png");
+
+        let second = allocate_asset_filename(dir, "diagram.png", &hash_a, &mut used);
+        assert_eq!(second, "diagram.png");
+
+        // Second `diagram.png` has short_hash `abcd1234`, which collides with `first` -> gets `-2`
+        let third = allocate_asset_filename(dir, "diagram.png", &hash_b, &mut used);
+        assert_eq!(third, "diagram-abcd1234-2.png");
+    }
 }

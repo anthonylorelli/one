@@ -305,20 +305,7 @@ impl<'a> PageBuildCtx<'a> {
         for row in table.contents() {
             let mut cells = Vec::new();
             for cell in row.contents() {
-                let mut cell_blocks = Vec::new();
-                for elem in cell.contents() {
-                    if detect_element_list_kind(elem).is_some() {
-                        let item = self.convert_list_item(elem);
-                        cell_blocks.push(Block::List {
-                            ordered: false,
-                            start: 1,
-                            items: vec![item],
-                        });
-                    } else {
-                        cell_blocks.extend(self.convert_plain_outline_element(elem));
-                    }
-                }
-                cells.push(cell_blocks);
+                cells.push(self.convert_outline_elements(cell.contents()));
             }
             rows.push(cells);
         }
@@ -328,6 +315,43 @@ impl<'a> PageBuildCtx<'a> {
             rows,
             tags: convert_note_tags(table.note_tags()),
         }
+    }
+
+    fn convert_outline_elements(&mut self, elements: &[OutlineElement]) -> Vec<Block> {
+        let mut blocks = Vec::new();
+        let mut idx = 0;
+
+        while idx < elements.len() {
+            let elem = &elements[idx];
+            if let Some(list_kind) = detect_element_list_kind(elem) {
+                let start = elem
+                    .list_contents()
+                    .first()
+                    .and_then(List::list_restart)
+                    .filter(|&n| n > 0)
+                    .map(|n| n as u32)
+                    .unwrap_or(1);
+
+                let mut list_items = Vec::new();
+                while idx < elements.len()
+                    && detect_element_list_kind(&elements[idx]) == Some(list_kind)
+                {
+                    list_items.push(self.convert_list_item(&elements[idx]));
+                    idx += 1;
+                }
+
+                blocks.push(Block::List {
+                    ordered: list_kind == ElementListKind::Ordered,
+                    start,
+                    items: list_items,
+                });
+            } else {
+                blocks.extend(self.convert_plain_outline_element(elem));
+                idx += 1;
+            }
+        }
+
+        blocks
     }
 
     fn convert_image(&mut self, image: &Image) -> Option<Block> {
@@ -493,7 +517,10 @@ fn detect_element_list_kind(elem: &OutlineElement) -> Option<ElementListKind> {
 }
 
 fn is_ordered_list(list: &List) -> bool {
-    let fmt = list.list_format();
+    is_ordered_list_format(list.list_format())
+}
+
+fn is_ordered_list_format(fmt: &[char]) -> bool {
     if fmt.is_empty() {
         return false;
     }
@@ -534,7 +561,11 @@ fn convert_rich_text_block(rt: &RichText) -> Option<Block> {
 }
 
 fn detect_heading_level(style: &ParagraphStyling) -> Option<u8> {
-    let id = style.style_id()?.trim().to_ascii_lowercase();
+    parse_heading_level_id(style.style_id()?)
+}
+
+fn parse_heading_level_id(style_id: &str) -> Option<u8> {
+    let id = style_id.trim().to_ascii_lowercase();
     match id.as_str() {
         "h1" | "heading 1" | "heading1" => Some(1),
         "h2" | "heading 2" | "heading2" => Some(2),
@@ -625,7 +656,7 @@ fn convert_rich_text_inlines(rt: &RichText) -> Vec<Inline> {
             && let Some((idx, link_inlines)) = active_link.take()
         {
             result.push(Inline::Link {
-                text: link_inlines,
+                text: coalesce_inlines(link_inlines),
                 target: LinkTarget::parse(hyperlinks[idx].target()),
             });
         }
@@ -644,12 +675,43 @@ fn convert_rich_text_inlines(rt: &RichText) -> Vec<Inline> {
 
     if let Some((idx, link_inlines)) = active_link.take() {
         result.push(Inline::Link {
-            text: link_inlines,
+            text: coalesce_inlines(link_inlines),
             target: LinkTarget::parse(hyperlinks[idx].target()),
         });
     }
 
-    result
+    coalesce_inlines(result)
+}
+
+/// Merge adjacent inline runs with identical formatting wrappers so split OneNote text runs
+/// emit clean `**foobar**` instead of broken `**foo****bar**` Markdown.
+fn coalesce_inlines(inlines: Vec<Inline>) -> Vec<Inline> {
+    let mut merged: Vec<Inline> = Vec::with_capacity(inlines.len());
+
+    for item in inlines {
+        match (merged.last_mut(), item) {
+            (Some(Inline::Text(prev)), Inline::Text(next)) => prev.push_str(&next),
+            (Some(Inline::Code(prev)), Inline::Code(next)) => prev.push_str(&next),
+            (Some(Inline::Bold(prev)), Inline::Bold(next)) => {
+                let mut combined = std::mem::take(prev);
+                combined.extend(next);
+                *prev = coalesce_inlines(combined);
+            }
+            (Some(Inline::Italic(prev)), Inline::Italic(next)) => {
+                let mut combined = std::mem::take(prev);
+                combined.extend(next);
+                *prev = coalesce_inlines(combined);
+            }
+            (Some(Inline::Strikethrough(prev)), Inline::Strikethrough(next)) => {
+                let mut combined = std::mem::take(prev);
+                combined.extend(next);
+                *prev = coalesce_inlines(combined);
+            }
+            (_, other) => merged.push(other),
+        }
+    }
+
+    merged
 }
 
 fn build_styled_inlines(
@@ -729,9 +791,10 @@ fn strip_onenote_control_chars(s: &str) -> String {
 }
 
 fn is_monospace_style(style: &ParagraphStyling) -> bool {
-    let Some(font) = style.font() else {
-        return false;
-    };
+    style.font().is_some_and(is_monospace_font_name)
+}
+
+fn is_monospace_font_name(font: &str) -> bool {
     let lower = font.trim().to_ascii_lowercase();
     matches!(
         lower.as_str(),
@@ -884,5 +947,97 @@ fn sniff_extension(bytes: &[u8]) -> Option<&'static str> {
         Some("pdf")
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coalesces_adjacent_styled_inlines_recursively() {
+        let input = vec![
+            Inline::Bold(vec![Inline::Italic(vec![Inline::Text("foo".into())])]),
+            Inline::Bold(vec![Inline::Italic(vec![Inline::Text("bar".into())])]),
+            Inline::Text(" ".into()),
+            Inline::Text("baz".into()),
+            Inline::Code("a".into()),
+            Inline::Code("b".into()),
+        ];
+
+        assert_eq!(
+            coalesce_inlines(input),
+            vec![
+                Inline::Bold(vec![Inline::Italic(vec![Inline::Text("foobar".into())])]),
+                Inline::Text(" baz".into()),
+                Inline::Code("ab".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn detects_ordered_vs_bulleted_list_formats() {
+        assert!(!is_ordered_list_format(&[]));
+        assert!(!is_ordered_list_format(&['\u{2022}']));
+        assert!(!is_ordered_list_format(&['-']));
+        assert!(is_ordered_list_format(&['\u{0000}', '.']));
+        assert!(is_ordered_list_format(&['\u{0001}', ')']));
+    }
+
+    #[test]
+    fn parses_heading_styles_and_monospace_fonts() {
+        assert_eq!(parse_heading_level_id("h1"), Some(1));
+        assert_eq!(parse_heading_level_id("Heading 3"), Some(3));
+        assert_eq!(parse_heading_level_id("Heading6"), Some(6));
+        assert_eq!(parse_heading_level_id("Normal"), None);
+
+        assert!(is_monospace_font_name("Consolas"));
+        assert!(is_monospace_font_name("JetBrains Mono"));
+        assert!(!is_monospace_font_name("Calibri"));
+    }
+
+    #[test]
+    fn classifies_tags_by_checkbox_label_and_shape() {
+        assert_eq!(
+            classify_tag("Custom", Some(NoteTagShape::GreenCheckBox), true),
+            NoteTagKind::ToDo
+        );
+        assert_eq!(
+            classify_tag("Important", None, false),
+            NoteTagKind::Important
+        );
+        assert_eq!(
+            classify_tag("My Star", Some(NoteTagShape::YellowStar), false),
+            NoteTagKind::Important
+        );
+        assert_eq!(
+            classify_tag("Brainstorm", Some(NoteTagShape::LightBulb), false),
+            NoteTagKind::Idea
+        );
+        assert_eq!(classify_tag("Misc", None, false), NoteTagKind::Custom);
+    }
+
+    #[test]
+    fn strips_onenote_control_chars_and_sniffs_magic_bytes() {
+        assert_eq!(
+            strip_onenote_control_chars("a\u{fddf}b\u{fffc}c\u{000b}d"),
+            "abcd"
+        );
+        assert_eq!(sniff_extension(b"\x89PNG\r\n\x1a\nrest"), Some("png"));
+        assert_eq!(sniff_extension(b"\xFF\xD8\xFF\xE0"), Some("jpg"));
+        assert_eq!(sniff_extension(b"GIF89a..."), Some("gif"));
+        assert_eq!(sniff_extension(b"RIFF1234WEBP"), Some("webp"));
+        assert_eq!(sniff_extension(b"%PDF-1.7"), Some("pdf"));
+        assert_eq!(sniff_extension(b"plain text"), None);
+    }
+
+    #[test]
+    fn ignores_epoch_zero_timestamps() {
+        assert_eq!(convert_utc_time(time::UtcDateTime::UNIX_EPOCH), None);
+        let valid = time::UtcDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        assert_eq!(
+            convert_utc_time(valid).map(|dt| dt.timestamp()),
+            Some(1_700_000_000)
+        );
     }
 }

@@ -292,26 +292,40 @@ impl OneNoteLink {
             }
 
             if let Some(fragment) = after_hash {
-                parse_onenote_fragment(fragment, &mut page_title, &mut section_id, &mut page_id);
-            } else {
+                parse_onenote_fragment(
+                    fragment,
+                    true,
+                    &mut page_title,
+                    &mut section_id,
+                    &mut page_id,
+                );
+            } else if without_scheme.contains('=') {
                 parse_onenote_fragment(
                     without_scheme,
+                    false,
                     &mut page_title,
                     &mut section_id,
                     &mut page_id,
                 );
             }
         } else {
-            // OneNote web URL with query/fragment parameters
+            // OneNote web URL with query/fragment parameters (including `wd=target(...)`)
             let search_part = raw.split_once('?').map(|(_, q)| q).unwrap_or(raw);
             for part in search_part.split(['&', '#']) {
                 if let Some((k, v)) = part.split_once('=') {
-                    let key = k.to_ascii_lowercase();
-                    let decoded_v = percent_decode_str(v).decode_utf8_lossy().to_string();
-                    if key == "page-id" {
-                        page_id = normalize_guid(&decoded_v);
-                    } else if key == "section-id" {
-                        section_id = normalize_guid(&decoded_v);
+                    let key = k.trim().to_ascii_lowercase();
+                    let decoded_v = percent_decode_str(v.trim()).decode_utf8_lossy().to_string();
+                    match key.as_str() {
+                        "page-id" => page_id = normalize_guid(&decoded_v),
+                        "section-id" => section_id = normalize_guid(&decoded_v),
+                        "wd" => parse_wd_target(
+                            &decoded_v,
+                            &mut section_name,
+                            &mut section_id,
+                            &mut page_title,
+                            &mut page_id,
+                        ),
+                        _ => {}
                     }
                 }
             }
@@ -329,6 +343,7 @@ impl OneNoteLink {
 
 fn parse_onenote_fragment(
     fragment: &str,
+    allow_leading_title: bool,
     page_title: &mut Option<String>,
     section_id: &mut Option<String>,
     page_id: &mut Option<String>,
@@ -342,13 +357,55 @@ fn parse_onenote_fragment(
                 "section-id" => *section_id = normalize_guid(&decoded_v),
                 _ => {}
             }
-        } else if idx == 0 {
+        } else if allow_leading_title && idx == 0 {
             let decoded = percent_decode_str(part.trim())
                 .decode_utf8_lossy()
                 .trim()
                 .to_string();
             if !decoded.is_empty() && !decoded.eq_ignore_ascii_case("end") {
                 *page_title = Some(decoded);
+            }
+        }
+    }
+}
+
+/// Parse OneNote web `wd=target(Section.one|sec-guid/Page Title|page-guid/)` parameters.
+fn parse_wd_target(
+    value: &str,
+    section_name: &mut Option<String>,
+    section_id: &mut Option<String>,
+    page_title: &mut Option<String>,
+    page_id: &mut Option<String>,
+) {
+    let trimmed = value.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let Some(start) = lower.find("target(") else {
+        return;
+    };
+    let inner = &trimmed[start + "target(".len()..];
+    let inner = inner.rsplit_once(')').map(|(before, _)| before).unwrap_or(inner);
+
+    for segment in inner.split('/').map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some((raw_name, raw_guid)) = segment.split_once('|') {
+            let name = raw_name.trim();
+            let guid = normalize_guid(raw_guid);
+            if let Some(sec) = name
+                .strip_suffix(".one")
+                .or_else(|| name.strip_suffix(".ONE"))
+            {
+                if !sec.trim().is_empty() {
+                    *section_name = Some(sec.trim().to_string());
+                }
+                if guid.is_some() {
+                    *section_id = guid;
+                }
+            } else {
+                if !name.is_empty() {
+                    *page_title = Some(name.to_string());
+                }
+                if guid.is_some() {
+                    *page_id = guid;
+                }
             }
         }
     }
@@ -425,5 +482,30 @@ mod tests {
             normalize_guid("{AF6DE84B-D817-4F07-8BAF-FB6629CB7C2C}{1}{B0}").as_deref(),
             Some("af6de84b-d817-4f07-8baf-fb6629cb7c2c")
         );
+    }
+
+    #[test]
+    fn parses_web_wd_target_link() {
+        let raw = "https://contoso.sharepoint.com/sites/eng/_layouts/OneNote.aspx?id=%2Fnb&wd=target%28Design%20Docs.one%7C11111111-1111-1111-1111-111111111111%2FAPI%20Spec%7C22222222-2222-2222-2222-222222222222%2F%29";
+        let link = OneNoteLink::parse(raw).expect("should parse wd=target link");
+        assert_eq!(link.section_name.as_deref(), Some("Design Docs"));
+        assert_eq!(
+            link.section_id.as_deref(),
+            Some("11111111-1111-1111-1111-111111111111")
+        );
+        assert_eq!(link.page_title.as_deref(), Some("API Spec"));
+        assert_eq!(
+            link.page_id.as_deref(),
+            Some("22222222-2222-2222-2222-222222222222")
+        );
+    }
+
+    #[test]
+    fn parses_section_only_onenote_link_without_fake_page_title() {
+        let raw = "onenote:../Ops.one";
+        let link = OneNoteLink::parse(raw).expect("should parse section-only link");
+        assert_eq!(link.section_name.as_deref(), Some("Ops"));
+        assert_eq!(link.page_title, None);
+        assert_eq!(link.page_id, None);
     }
 }

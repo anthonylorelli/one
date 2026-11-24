@@ -127,7 +127,12 @@ impl<'a> RenderCtx<'a> {
             Block::CodeBlock { language, code } => {
                 let lang = language.as_deref().unwrap_or("");
                 let fence = choose_code_fence(code);
-                format!("{pad}{fence}{lang}\n{code}\n{pad}{fence}")
+                let indented_code = code
+                    .lines()
+                    .map(|l| format!("{pad}{l}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("{pad}{fence}{lang}\n{indented_code}\n{pad}{fence}")
             }
             Block::Image {
                 asset_id,
@@ -198,32 +203,46 @@ impl<'a> RenderCtx<'a> {
                 "- ".to_string()
             };
 
+            // In CommonMark/GFM, child indentation under ordered markers (`1. `, `10. `) must
+            // align with the content column (`marker.len()`); task items still use `- ` bullets.
+            let child_indent = if checkbox.is_some() {
+                indent + 2
+            } else {
+                indent + marker.len()
+            };
+            let cont_pad = " ".repeat(child_indent);
+
             let (prefix, suffix) = format_non_checkbox_tags(&item.tags, self.options.tag_style);
-            let mut content_parts = Vec::new();
+            let mut first_line_text: Option<String> = None;
+            let mut extra_blocks: Vec<String> = Vec::new();
+
             for block in &item.content {
                 match block {
-                    Block::Paragraph { inlines, tags } => {
+                    Block::Paragraph { inlines, tags } if first_line_text.is_none() => {
                         let text = self.render_inlines(inlines);
                         let (p, s) = format_non_checkbox_tags(tags, self.options.tag_style);
                         let combined = format!("{p}{}{s}", text.trim());
                         if !combined.trim().is_empty() {
-                            content_parts.push(combined);
+                            first_line_text = Some(indent_continuation_lines(&combined, &cont_pad));
                         }
                     }
                     other => {
-                        let rendered = self.render_block(other, 0);
+                        let rendered = self.render_block(other, child_indent);
                         if !rendered.trim().is_empty() {
-                            content_parts.push(rendered);
+                            extra_blocks.push(rendered);
                         }
                     }
                 }
             }
 
-            let first_line = content_parts.join(" ");
-            lines.push(format!("{pad}{marker}{prefix}{}{suffix}", first_line.trim()));
+            let lead = first_line_text.unwrap_or_default();
+            lines.push(format!("{pad}{marker}{prefix}{}{suffix}", lead.trim()));
+
+            for extra in extra_blocks {
+                lines.push(extra);
+            }
 
             if !item.children.is_empty() {
-                let child_indent = indent + 2;
                 let mut child_chunks = Vec::new();
                 for child in &item.children {
                     let rendered_child = self.render_block(child, child_indent);
@@ -473,12 +492,33 @@ fn push_yaml_raw(out: &mut String, key: &str, value: &str) {
 }
 
 fn yaml_quote(s: &str) -> String {
-    let escaped = s
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "");
+    let mut escaped = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => {}
+            '\t' => escaped.push_str("\\t"),
+            c if (c as u32) < 0x20 => escaped.push(' '),
+            c => escaped.push(c),
+        }
+    }
     format!("\"{escaped}\"")
+}
+
+fn indent_continuation_lines(text: &str, pad: &str) -> String {
+    let mut lines = text.lines();
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+    let mut out = first.to_string();
+    for line in lines {
+        out.push('\n');
+        out.push_str(pad);
+        out.push_str(line);
+    }
+    out
 }
 
 fn collect_page_tags(blocks: &[Block]) -> Vec<String> {
@@ -813,5 +853,86 @@ mod tests {
         assert!(rendered.markdown.contains("**deploy** `cargo build` #important"));
         assert!(rendered.markdown.contains("- [ ] Write tests\n- [x] Design IR"));
         assert!(rendered.markdown.contains("| Key | Value |\n| --- | --- |\n| Format | GFM \\| Pipe |"));
+    }
+
+    #[test]
+    fn indents_ordered_sublists_and_multiline_items_per_gfm() {
+        let bundle = SourceBundle {
+            notebooks: vec![Notebook {
+                id: None,
+                name: "Nb".into(),
+                entries: vec![SectionEntry::Section(Section {
+                    id: None,
+                    name: "Sec".into(),
+                    pages: vec![Page {
+                        id: None,
+                        title: "Lists".into(),
+                        level: 0,
+                        created_at: None,
+                        updated_at: None,
+                        author: None,
+                        web_url: None,
+                        client_url: None,
+                        blocks: vec![Block::List {
+                            ordered: true,
+                            start: 1,
+                            items: vec![ListItem {
+                                checkbox: None,
+                                tags: vec![],
+                                content: vec![
+                                    Block::Paragraph {
+                                        inlines: vec![
+                                            Inline::Text("First line".into()),
+                                            Inline::LineBreak,
+                                            Inline::Text("Second line".into()),
+                                        ],
+                                        tags: vec![],
+                                    },
+                                    Block::CodeBlock {
+                                        language: Some("rust".into()),
+                                        code: "fn main() {}\nlet x = 1;".into(),
+                                    },
+                                ],
+                                children: vec![Block::List {
+                                    ordered: false,
+                                    start: 1,
+                                    items: vec![ListItem {
+                                        checkbox: None,
+                                        tags: vec![],
+                                        content: vec![Block::Paragraph {
+                                            inlines: vec![Inline::Text("Nested child".into())],
+                                            tags: vec![],
+                                        }],
+                                        children: vec![],
+                                    }],
+                                }],
+                            }],
+                        }],
+                        assets: vec![],
+                    }],
+                })],
+            }],
+            warnings: vec![],
+        };
+
+        let opts = ExportOptions {
+            include_frontmatter: false,
+            ..Default::default()
+        };
+        let plan = build_plan(&bundle, &opts);
+        let rendered = render_page(&plan.pages[0], &HashMap::new(), &plan.registry, &opts);
+
+        assert!(
+            rendered.markdown.contains(
+                "1. First line  \n   Second line\n   ```rust\n   fn main() {}\n   let x = 1;\n   ```\n   - Nested child"
+            ),
+            "Unexpected markdown:\n{}",
+            rendered.markdown
+        );
+    }
+
+    #[test]
+    fn yaml_quote_escapes_tabs_and_control_chars() {
+        assert_eq!(yaml_quote("a\tb\nc\x07d"), "\"a\\tb\\nc d\"");
     }
 }
