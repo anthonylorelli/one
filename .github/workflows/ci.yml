@@ -21,6 +21,7 @@ jobs:
   lint:
     name: Format & Clippy
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -38,6 +39,7 @@ jobs:
 
   build-and-test:
     name: Build & Test (${{ matrix.os_name }} ${{ matrix.arch }})
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -68,7 +70,7 @@ jobs:
             bin: one
           - os_name: Windows
             arch: x64
-            runner: windows-latest
+            runner: windows-2025
             target: x86_64-pc-windows-msvc
             archive: zip
             bin: one.exe
@@ -102,7 +104,7 @@ jobs:
         run: ./target/${{ matrix.target }}/release/${{ matrix.bin }} --version
 
       - name: Package archive (Unix)
-        if: matrix.archive == 'tar.gz'
+        if: github.event_name != 'pull_request' && matrix.archive == 'tar.gz'
         shell: bash
         run: |
           mkdir -p dist
@@ -111,7 +113,7 @@ jobs:
           tar -czf one-${{ matrix.target }}.tar.gz -C dist ${{ matrix.bin }} README.md
 
       - name: Package archive (Windows)
-        if: matrix.archive == 'zip'
+        if: github.event_name != 'pull_request' && matrix.archive == 'zip'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
@@ -120,6 +122,7 @@ jobs:
           Compress-Archive -Path dist/${{ matrix.bin }}, dist/README.md -DestinationPath one-${{ matrix.target }}.zip -Force
 
       - name: Upload build artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: one-${{ matrix.target }}
