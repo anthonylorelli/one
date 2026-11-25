@@ -191,9 +191,12 @@ impl<'a> RenderCtx<'a> {
         let pad = " ".repeat(indent);
 
         for (i, item) in items.iter().enumerate() {
-            let checkbox = item
-                .checkbox
-                .or_else(|| item.tags.iter().find(|t| t.is_checkbox).map(|t| t.completed));
+            let checkbox = item.checkbox.or_else(|| {
+                item.tags
+                    .iter()
+                    .find(|t| t.is_checkbox)
+                    .map(|t| t.completed)
+            });
 
             let marker = if let Some(done) = checkbox {
                 if done {
@@ -278,7 +281,10 @@ impl<'a> RenderCtx<'a> {
     ) -> String {
         let (header_row, body_rows): (Vec<String>, Vec<Vec<String>>) = match headers {
             Some(hdr) => {
-                let h = hdr.iter().map(|cell| self.render_table_cell(cell)).collect();
+                let h = hdr
+                    .iter()
+                    .map(|cell| self.render_table_cell(cell))
+                    .collect();
                 let b = rows
                     .iter()
                     .map(|r| r.iter().map(|cell| self.render_table_cell(cell)).collect())
@@ -380,8 +386,10 @@ impl<'a> RenderCtx<'a> {
                     self.links_resolved += 1;
                     match self.options.links {
                         LinkStyle::Relative => {
-                            let rel =
-                                relative_path_from_file(&self.planned.relative_md_path, target_path);
+                            let rel = relative_path_from_file(
+                                &self.planned.relative_md_path,
+                                target_path,
+                            );
                             let encoded = encode_markdown_path(&rel);
                             let display = if label.trim().is_empty() {
                                 target_path
@@ -414,9 +422,7 @@ impl<'a> RenderCtx<'a> {
                         target_raw: link.raw.clone(),
                     });
                     let display = if label.trim().is_empty() {
-                        link.page_title
-                            .clone()
-                            .unwrap_or_else(|| link.raw.clone())
+                        link.page_title.clone().unwrap_or_else(|| link.raw.clone())
                     } else {
                         label
                     };
@@ -465,7 +471,12 @@ fn write_frontmatter(out: &mut String, planned: &PlannedPage<'_>, tags: &[String
     if let Some(updated) = planned.page.updated_at {
         push_yaml_raw(out, "updated", &updated.to_rfc3339());
     }
-    if let Some(author) = planned.page.author.as_deref().filter(|a| !a.trim().is_empty()) {
+    if let Some(author) = planned
+        .page
+        .author
+        .as_deref()
+        .filter(|a| !a.trim().is_empty())
+    {
         push_yaml_str(out, "author", author);
     }
     push_yaml_str(out, "notebook", &planned.notebook_name);
@@ -663,13 +674,11 @@ fn wrap_emphasis(content: &str, delim: &str) -> String {
 }
 
 fn format_inline_code(code: &str) -> String {
-    let max_backticks = code
-        .split(|c| c != '`')
-        .map(str::len)
-        .max()
-        .unwrap_or(0);
+    let max_backticks = code.split(|c| c != '`').map(str::len).max().unwrap_or(0);
     let ticks = "`".repeat(max_backticks + 1);
-    if code.starts_with('`') || code.ends_with('`') || (code.starts_with(' ') && code.ends_with(' '))
+    if code.starts_with('`')
+        || code.ends_with('`')
+        || (code.starts_with(' ') && code.ends_with(' '))
     {
         format!("{ticks} {code} {ticks}")
     } else {
@@ -713,7 +722,9 @@ fn escape_markdown_text(text: &str) -> String {
 }
 
 fn escape_bracket_text(text: &str) -> String {
-    text.replace('[', "\\[").replace(']', "\\]").replace('\n', " ")
+    text.replace('[', "\\[")
+        .replace(']', "\\]")
+        .replace('\n', " ")
 }
 
 fn encode_external_url(url: &str) -> String {
@@ -734,7 +745,9 @@ mod tests {
 
     #[test]
     fn renders_full_gfm_page_with_frontmatter_tags_tasks_tables_and_links() {
-        let created = chrono::Utc.with_ymd_and_hms(2025, 3, 14, 18, 22, 0).unwrap();
+        let created = chrono::Utc
+            .with_ymd_and_hms(2025, 3, 14, 18, 22, 0)
+            .unwrap();
         let updated = chrono::Utc.with_ymd_and_hms(2026, 1, 9, 9, 15, 42).unwrap();
 
         let bundle = SourceBundle {
@@ -857,12 +870,32 @@ mod tests {
         assert_eq!(rendered.links_resolved, 1);
         assert!(rendered.unresolved_links.is_empty());
         assert!(rendered.markdown.contains("title: \"Overview\""));
-        assert!(rendered.markdown.contains("created: 2025-03-14T18:22:00+00:00"));
+        assert!(
+            rendered
+                .markdown
+                .contains("created: 2025-03-14T18:22:00+00:00")
+        );
         assert!(rendered.markdown.contains("  - \"important\""));
-        assert!(rendered.markdown.contains("[API Spec](../Reference/API%20Spec.md)"));
-        assert!(rendered.markdown.contains("**deploy** `cargo build` #important"));
-        assert!(rendered.markdown.contains("- [ ] Write tests\n- [x] Design IR"));
-        assert!(rendered.markdown.contains("| Key | Value |\n| --- | --- |\n| Format | GFM \\| Pipe |"));
+        assert!(
+            rendered
+                .markdown
+                .contains("[API Spec](../Reference/API%20Spec.md)")
+        );
+        assert!(
+            rendered
+                .markdown
+                .contains("**deploy** `cargo build` #important")
+        );
+        assert!(
+            rendered
+                .markdown
+                .contains("- [ ] Write tests\n- [x] Design IR")
+        );
+        assert!(
+            rendered
+                .markdown
+                .contains("| Key | Value |\n| --- | --- |\n| Format | GFM \\| Pipe |")
+        );
     }
 
     #[test]

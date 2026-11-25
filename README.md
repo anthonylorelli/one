@@ -1,5 +1,7 @@
 # one
 
+[![CI](https://github.com/anthonylorelli/one/actions/workflows/ci.yml/badge.svg)](https://github.com/anthonylorelli/one/actions/workflows/ci.yml)
+
 A fast, single-binary Rust CLI tool to export Microsoft OneNote notebooks to clean **GitHub Flavored Markdown (GFM)** with YAML frontmatter, extracted media, preserved hierarchy, checkboxes/tags, and resolved internal cross-page links.
 
 Designed for migrating notes out of OneNote into Git repositories, VS Code, Obsidian, Notion, Logseq, or any Markdown-based workflow — completely offline for local files, with a pluggable architecture built to add Microsoft Graph cloud support next.
@@ -27,6 +29,14 @@ Designed for migrating notes out of OneNote into Git repositories, VS Code, Obsi
 ---
 
 ## Installation
+
+### Prebuilt binaries
+
+Download prebuilt **x64** and **arm64** archives for Linux, macOS, and Windows (plus `SHA256SUMS.txt`) from the [GitHub Releases](https://github.com/anthonylorelli/one/releases) page, or grab the latest build artifacts from the [CI workflow](https://github.com/anthonylorelli/one/actions/workflows/ci.yml).
+
+To cut a new release, push a version tag (e.g., `git tag v0.1.0 && git push origin v0.1.0`).
+
+### Build from source
 
 Requires Rust **1.85+** (Edition 2024).
 

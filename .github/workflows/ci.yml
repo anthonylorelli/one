@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Format & Clippy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+  build-and-test:
+    name: Build & Test (${{ matrix.os_name }} ${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os_name: Linux
+            arch: x64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+            bin: one
+          - os_name: Linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+            bin: one
+          - os_name: macOS
+            arch: x64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar.gz
+            bin: one
+          - os_name: macOS
+            arch: arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            archive: tar.gz
+            bin: one
+          - os_name: Windows
+            arch: x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            bin: one.exe
+          - os_name: Windows
+            arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive: zip
+            bin: one.exe
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Run tests
+        run: cargo test --locked --target ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Smoke test binary
+        shell: bash
+        run: ./target/${{ matrix.target }}/release/${{ matrix.bin }} --version
+
+      - name: Package archive (Unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/${{ matrix.bin }} dist/
+          cp README.md dist/
+          tar -czf one-${{ matrix.target }}.tar.gz -C dist ${{ matrix.bin }} README.md
+
+      - name: Package archive (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/${{ matrix.bin }} dist/
+          Copy-Item README.md dist/
+          Compress-Archive -Path dist/${{ matrix.bin }}, dist/README.md -DestinationPath one-${{ matrix.target }}.zip -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: one-${{ matrix.target }}
+          path: one-${{ matrix.target }}.${{ matrix.archive }}
+          retention-days: 14

@@ -175,14 +175,9 @@ pub enum Block {
         tags: Vec<NoteTag>,
     },
     /// Recognized handwriting text extracted from OneNote ink OCR.
-    InkText {
-        text: String,
-    },
+    InkText { text: String },
     /// Placeholder for content that cannot be faithfully represented in GFM.
-    Unsupported {
-        kind: String,
-        detail: String,
-    },
+    Unsupported { kind: String, detail: String },
 }
 
 /// An item in an ordered, unordered, or task list.
@@ -252,7 +247,9 @@ impl OneNoteLink {
         let is_web_onenote = (lower.contains("onedrive.live.com")
             || lower.contains("sharepoint.com")
             || lower.contains("onenote.com"))
-            && (lower.contains("page-id=") || lower.contains("section-id=") || lower.contains("wd=target"));
+            && (lower.contains("page-id=")
+                || lower.contains("section-id=")
+                || lower.contains("wd=target"));
 
         if !is_onenote_scheme && !is_web_onenote {
             return None;
@@ -383,7 +380,10 @@ fn parse_wd_target(
         return;
     };
     let inner = &trimmed[start + "target(".len()..];
-    let inner = inner.rsplit_once(')').map(|(before, _)| before).unwrap_or(inner);
+    let inner = inner
+        .rsplit_once(')')
+        .map(|(before, _)| before)
+        .unwrap_or(inner);
 
     for segment in inner.split('/').map(str::trim).filter(|s| !s.is_empty()) {
         if let Some((raw_name, raw_guid)) = segment.split_once('|') {

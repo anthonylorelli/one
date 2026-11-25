@@ -68,12 +68,8 @@ pub fn export_bundle(
             } else {
                 let assets_dir = planned.section_dir.join("_assets");
                 let clean_name = sanitize_filename(&asset.filename, "asset", None);
-                let unique_name = allocate_asset_filename(
-                    &assets_dir,
-                    &clean_name,
-                    &hash,
-                    &mut used_asset_names,
-                );
+                let unique_name =
+                    allocate_asset_filename(&assets_dir, &clean_name, &hash, &mut used_asset_names);
                 let rel_path = assets_dir.join(unique_name);
 
                 if !options.dry_run {
