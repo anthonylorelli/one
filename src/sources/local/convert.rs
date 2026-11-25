@@ -40,10 +40,7 @@ pub fn convert_notebook(
     }
 }
 
-fn convert_section_entry(
-    raw: &RawSectionEntry,
-    warnings: &mut Vec<ExportWarning>,
-) -> SectionEntry {
+fn convert_section_entry(raw: &RawSectionEntry, warnings: &mut Vec<ExportWarning>) -> SectionEntry {
     match raw {
         RawSectionEntry::Section(sec) => SectionEntry::Section(convert_section(sec, warnings)),
         RawSectionEntry::SectionGroup(group) => {
@@ -52,10 +49,7 @@ fn convert_section_entry(
     }
 }
 
-fn convert_section_group(
-    raw: &RawSectionGroup,
-    warnings: &mut Vec<ExportWarning>,
-) -> SectionGroup {
+fn convert_section_group(raw: &RawSectionGroup, warnings: &mut Vec<ExportWarning>) -> SectionGroup {
     let entries = raw
         .entries()
         .iter()
@@ -506,9 +500,10 @@ fn detect_element_list_kind(elem: &OutlineElement) -> Option<ElementListKind> {
 
     // Treat standalone paragraphs with checkbox NoteTags as task-list items so consecutive
     // checkboxes form a clean GFM task list without extra blank lines between items.
-    let has_checkbox = elem.contents().iter().any(|c| {
-        matches!(c, Content::RichText(rt) if rt.note_tags().iter().any(is_checkbox_tag))
-    });
+    let has_checkbox = elem
+        .contents()
+        .iter()
+        .any(|c| matches!(c, Content::RichText(rt) if rt.note_tags().iter().any(is_checkbox_tag)));
     if has_checkbox {
         return Some(ElementListKind::Task);
     }
@@ -768,7 +763,11 @@ fn visible_plain_text(rt: &RichText) -> String {
         return normalize_newlines(&strip_onenote_control_chars(rt.text()));
     }
     let mut bounds: Vec<usize> = std::iter::once(0)
-        .chain(rt.text_run_indices().iter().map(|&i| (i as usize).min(utf16.len())))
+        .chain(
+            rt.text_run_indices()
+                .iter()
+                .map(|&i| (i as usize).min(utf16.len())),
+        )
         .collect();
     if bounds.len() == formatting.len() {
         bounds.push(utf16.len());
@@ -784,7 +783,9 @@ fn visible_plain_text(rt: &RichText) -> String {
             out.extend_from_slice(&utf16[start..end]);
         }
     }
-    normalize_newlines(&strip_onenote_control_chars(&String::from_utf16_lossy(&out)))
+    normalize_newlines(&strip_onenote_control_chars(&String::from_utf16_lossy(
+        &out,
+    )))
 }
 
 fn normalize_newlines(s: &str) -> String {
@@ -925,11 +926,7 @@ fn convert_utc_time(dt: time::UtcDateTime) -> Option<DateTime<Utc>> {
     DateTime::from_timestamp(ts, dt.nanosecond())
 }
 
-fn collect_parser_warnings(
-    scope: &str,
-    report: &ParserReport,
-    out: &mut Vec<ExportWarning>,
-) {
+fn collect_parser_warnings(scope: &str, report: &ParserReport, out: &mut Vec<ExportWarning>) {
     for warning in report.warnings() {
         let warn_scope = match warning.page() {
             Some((_, page_title)) => format!("{scope}/{page_title}"),

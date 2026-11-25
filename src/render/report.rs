@@ -37,7 +37,11 @@ impl ExportReport {
         println!("  Sections:   {}", self.sections_exported);
         println!("  Pages:      {}", self.pages_exported);
         println!("  Assets:     {}", self.assets_written);
-        println!("  Links:      {} resolved, {} unresolved", self.links_resolved, self.unresolved_links.len());
+        println!(
+            "  Links:      {} resolved, {} unresolved",
+            self.links_resolved,
+            self.unresolved_links.len()
+        );
         if !self.warnings.is_empty() {
             println!("  Warnings:   {}", self.warnings.len());
         }

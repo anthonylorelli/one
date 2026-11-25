@@ -50,7 +50,9 @@ impl LinkRegistry {
         let path_buf = rel_md_path.to_path_buf();
 
         if let Some(id) = page.id.as_deref().and_then(normalize_guid) {
-            self.by_page_id.entry(id).or_insert_with(|| path_buf.clone());
+            self.by_page_id
+                .entry(id)
+                .or_insert_with(|| path_buf.clone());
         }
 
         // First page of a section serves as the target for section-only links.
@@ -349,7 +351,10 @@ fn plan_pages_flat<'a>(
             .collect::<Vec<_>>()
             .join(".");
 
-        let raw_stem = format!("{prefix} {}", sanitize_segment(&page.title, "Untitled Page"));
+        let raw_stem = format!(
+            "{prefix} {}",
+            sanitize_segment(&page.title, "Untitled Page")
+        );
         let stem = deduplicate_name(&raw_stem, &mut used);
         let rel_md_path = section_dir.join(format!("{stem}.md"));
 

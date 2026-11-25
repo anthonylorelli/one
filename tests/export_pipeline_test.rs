@@ -76,31 +76,29 @@ fn sample_bundle() -> SourceBundle {
                                     Block::List {
                                         ordered: false,
                                         start: 1,
-                                        items: vec![
-                                            ListItem {
-                                                checkbox: Some(false),
+                                        items: vec![ListItem {
+                                            checkbox: Some(false),
+                                            tags: vec![],
+                                            content: vec![Block::Paragraph {
+                                                inlines: vec![Inline::Text("Ship v1".into())],
                                                 tags: vec![],
-                                                content: vec![Block::Paragraph {
-                                                    inlines: vec![Inline::Text("Ship v1".into())],
+                                            }],
+                                            children: vec![Block::List {
+                                                ordered: false,
+                                                start: 1,
+                                                items: vec![ListItem {
+                                                    checkbox: Some(true),
                                                     tags: vec![],
-                                                }],
-                                                children: vec![Block::List {
-                                                    ordered: false,
-                                                    start: 1,
-                                                    items: vec![ListItem {
-                                                        checkbox: Some(true),
+                                                    content: vec![Block::Paragraph {
+                                                        inlines: vec![Inline::Text(
+                                                            "Build parser".into(),
+                                                        )],
                                                         tags: vec![],
-                                                        content: vec![Block::Paragraph {
-                                                            inlines: vec![Inline::Text(
-                                                                "Build parser".into(),
-                                                            )],
-                                                            tags: vec![],
-                                                        }],
-                                                        children: vec![],
                                                     }],
+                                                    children: vec![],
                                                 }],
-                                            },
-                                        ],
+                                            }],
+                                        }],
                                     },
                                     Block::Image {
                                         asset_id: "img-1".into(),

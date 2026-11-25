@@ -62,9 +62,9 @@ impl OneNoteSource for LocalFileSource {
         let notebook = match ext.as_str() {
             "onepkg" => {
                 let nb_name = file_stem_or(path, "Notebook");
-                let parsed = parser
-                    .parse_package(typed.to_path())
-                    .with_context(|| format!("Failed to parse .onepkg archive: {}", path.display()))?;
+                let parsed = parser.parse_package(typed.to_path()).with_context(|| {
+                    format!("Failed to parse .onepkg archive: {}", path.display())
+                })?;
                 convert::convert_notebook(&parsed, nb_name, &mut warnings)
             }
             "onetoc2" => {
@@ -74,9 +74,9 @@ impl OneNoteSource for LocalFileSource {
                     .map(|n| n.to_string_lossy().into_owned())
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| file_stem_or(path, "Notebook"));
-                let parsed = parser
-                    .parse_notebook(typed.to_path())
-                    .with_context(|| format!("Failed to parse .onetoc2 notebook: {}", path.display()))?;
+                let parsed = parser.parse_notebook(typed.to_path()).with_context(|| {
+                    format!("Failed to parse .onetoc2 notebook: {}", path.display())
+                })?;
                 convert::convert_notebook(&parsed, nb_name, &mut warnings)
             }
             "one" => {
@@ -157,8 +157,8 @@ fn load_directory_entries(
     let mut one_files: Vec<PathBuf> = Vec::new();
     let mut subdirs: Vec<PathBuf> = Vec::new();
 
-    for entry in fs::read_dir(dir)
-        .with_context(|| format!("Failed to read directory: {}", dir.display()))?
+    for entry in
+        fs::read_dir(dir).with_context(|| format!("Failed to read directory: {}", dir.display()))?
     {
         let entry = entry?;
         let file_type = entry.file_type()?;

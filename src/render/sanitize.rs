@@ -168,7 +168,10 @@ mod tests {
 
     #[test]
     fn sanitizes_illegal_chars_and_reserved_names() {
-        assert_eq!(sanitize_segment("Q1: Budget / Plan?", "Untitled"), "Q1- Budget - Plan-");
+        assert_eq!(
+            sanitize_segment("Q1: Budget / Plan?", "Untitled"),
+            "Q1- Budget - Plan-"
+        );
         assert_eq!(sanitize_segment("   ...  ", "Untitled"), "Untitled");
         assert_eq!(sanitize_segment("CON", "Untitled"), "_CON");
         assert_eq!(sanitize_segment("nul.txt", "Untitled"), "_nul.txt");
@@ -184,10 +187,7 @@ mod tests {
             sanitize_filename("photo.jpg", "image", Some("png")),
             "photo.jpg"
         );
-        assert_eq!(
-            sanitize_filename("", "image", Some("png")),
-            "image.png"
-        );
+        assert_eq!(sanitize_filename("", "image", Some("png")), "image.png");
     }
 
     #[test]
